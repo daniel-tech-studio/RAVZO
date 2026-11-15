@@ -9,7 +9,7 @@ import 'package:path_provider/path_provider.dart';
 /// dont la clé vit dans le stockage sécurisé (llm.md §4.3 « cache local minimal chiffré »).
 class SecureStore {
   static const _secure = FlutterSecureStorage(
-    mOptions: MacOsOptions(usesDataProtectionKeychain: false, accessibility: KeychainAccessibility.first_unlock_this_device),
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false, accountName: 'bj.ravzo.ravzo.secure', accessibility: KeychainAccessibility.first_unlock_this_device),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
   );
   final _aes = AesGcm.with256bits();
