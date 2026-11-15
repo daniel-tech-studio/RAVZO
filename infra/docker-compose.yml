@@ -1,0 +1,25 @@
+# RAVZO — infrastructure locale de développement (mono-hôte).
+# NB : ce fichier NE constitue PAS la topologie distribuée B38 (voir docs/runbooks/deployment.md).
+name: ravzo-dev
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ravzo
+      POSTGRES_PASSWORD: ravzo_dev_only
+      POSTGRES_DB: ravzo
+    ports: ["127.0.0.1:55440:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ravzo"]
+      interval: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:56390:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+volumes:
+  pgdata:

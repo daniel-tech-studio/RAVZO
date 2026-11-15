@@ -1,0 +1,20 @@
+import { FcmPushService } from './platform/fcm-push.service';
+import { DocumentsService } from './platform/documents.service';
+import { ImportsService } from './platform/imports.service';
+import { InsightsService } from './platform/insights.service';
+import { PlatformController } from './platform/platform.controller';
+import { SseController } from './platform/sse.controller';
+import { SyncService } from './platform/sync.service';
+import { LimitsService } from './payments/limits.service';
+import { PaymentsController } from './payments/payments.controller';
+import { PaymentsService } from './payments/payments.service';
+import { PAYMENT_PROVIDER, providerFactory } from './payments/provider.port';
+import { ReconciliationService } from './payments/reconciliation.service';
+import { AssetsService } from './wealth/assets.service';
+import { InvestmentsService } from './wealth/investments.service';
+import { LiabilitiesService } from './wealth/liabilities.service';
+import { MarketService } from './wealth/market.service';
+import { WealthController } from './wealth/wealth.controller';
+
+export const DOMAIN_CONTROLLERS: any[] = [WealthController, PaymentsController, PlatformController, SseController];
+export const DOMAIN_PROVIDERS: any[] = [LiabilitiesService, AssetsService, InvestmentsService, MarketService, LimitsService, PaymentsService, ReconciliationService, SyncService, InsightsService, DocumentsService, ImportsService, FcmPushService, { provide: PAYMENT_PROVIDER, useFactory: providerFactory }];

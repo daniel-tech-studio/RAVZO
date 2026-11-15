@@ -1,0 +1,20 @@
+process.env.DB_PRIMARY_URL = process.env.TEST_DB_URL ?? 'postgresql://ravzo:ravzo_dev_only@127.0.0.1:55440/ravzo_test';
+process.env.DB_READ_URL = '';
+process.env.APP_ENV = 'test';
+process.env.PSP_PROVIDER = 'fake';
+process.env.PAYMENTS_LIVE_ENABLED = 'false';
+process.env.TOKEN_SECRET = 'test-token-secret-0123456789abcdef0123456789';
+process.env.CURSOR_SECRET = 'test-cursor-secret-0123456789abcdef';
+process.env.WEBHOOK_VERIFY_SECRET = 'test-webhook-secret';
+process.env.DOCUMENT_MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
+process.env.STORAGE_DIR = '/tmp/ravzo-test-storage';
+// Jamais d'intégration réelle en test (pas d'e-mail, pas d'appel MansaAPI/Firebase).
+process.env.SMTP_HOST = '';
+process.env.MANSA_API_KEY = '';
+process.env.MARKET_PROVIDER = 'manual';
+process.env.FCM_SERVICE_ACCOUNT_FILE = '';
+process.env.FCM_PROJECT_ID = '';
+process.env.FEEXPAY_API_KEY = '';
+process.env.FEEXPAY_SHOP_ID = '';
+process.env.FEEXPAY_WEBHOOK_SECRET = '';
+process.env.FEEXPAY_API_BASE = 'http://127.0.0.1:9';

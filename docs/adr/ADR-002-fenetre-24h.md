@@ -1,0 +1,2 @@
+# ADR-002 — Ancrage de la fenêtre glissante de 24 h
+La fenêtre est ancrée sur l'horodatage **serveur de réservation** (`LimitHold.windowAnchoredAt`, posé à l'autorisation forte), jamais déplacé lors d'un rapprochement tardif. ACTIVE et SETTLED comptent (un paiement exécuté puis remboursé compte 24 h) ; seul RELEASED (non-exécution prouvée) libère. Toutes les réservations sont sérialisées par verrou `FOR UPDATE` sur la politique active, en transaction SERIALIZABLE. Tests : T02, T03, T04, T05, T06.

@@ -1,0 +1,1266 @@
+// RAVZO — schéma logique backend.md §14 traduit en Prisma.
+// Montants : BigInt en unités mineures (XOF sans décimales). Quantités/prix titres : Decimal(28,10).
+// Invariants non exprimables en Prisma (équilibre des postings, append-only) : voir migrations SQL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DB_PRIMARY_URL")
+}
+
+// ───────────────────────────── Identité et sécurité ─────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  passwordHash String
+  displayName  String
+  status       UserStatus @default(ACTIVE)
+  locale       String     @default("fr")
+  timezone     String     @default("Africa/Porto-Novo")
+  preferences  Json       @default("{}")
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(3)
+  version      Int        @default(1)
+}
+
+enum DeviceStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+model TrustedDevice {
+  id           String       @id @default(uuid()) @db.Uuid
+  ownerId      String       @db.Uuid
+  name         String
+  platform     String
+  publicKey    String // Ed25519 SPKI base64 — la clé privée n'est JAMAIS stockée serveur
+  keyAlgorithm String       @default("Ed25519")
+  fingerprint  String       @unique
+  status       DeviceStatus @default(PENDING)
+  approvedAt   DateTime?    @db.Timestamptz(3)
+  revokedAt    DateTime?    @db.Timestamptz(3)
+  lastSeenAt   DateTime?    @db.Timestamptz(3)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+  sessions     Session[]
+
+  @@index([ownerId, status])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model DeviceApproval {
+  id                String         @id @default(uuid()) @db.Uuid
+  ownerId           String         @db.Uuid
+  candidateDeviceId String         @db.Uuid
+  approverDeviceId  String?        @db.Uuid
+  challengeHash     String         @unique
+  method            String         @default("TRUSTED_DEVICE") // TRUSTED_DEVICE | BOOTSTRAP | RECOVERY
+  expiresAt         DateTime       @db.Timestamptz(3)
+  status            ApprovalStatus @default(PENDING)
+  approvedAt        DateTime?      @db.Timestamptz(3)
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+}
+
+model Session {
+  id               String        @id @default(uuid()) @db.Uuid
+  ownerId          String        @db.Uuid
+  deviceId         String?       @db.Uuid
+  device           TrustedDevice? @relation(fields: [deviceId], references: [id])
+  refreshTokenHash String        @unique
+  familyId         String        @db.Uuid
+  issuedAt         DateTime      @default(now()) @db.Timestamptz(3)
+  expiresAt        DateTime      @db.Timestamptz(3)
+  revokedAt        DateTime?     @db.Timestamptz(3)
+  rotatedAt        DateTime?     @db.Timestamptz(3)
+  revokeReason     String?
+  riskScore        Int           @default(0)
+  userAgent        String?
+
+  @@index([ownerId, revokedAt])
+  @@index([familyId])
+}
+
+model RecoveryCode {
+  id          String    @id @default(uuid()) @db.Uuid
+  ownerId     String    @db.Uuid
+  codeHash    String
+  generatedAt DateTime  @default(now()) @db.Timestamptz(3)
+  usedAt      DateTime? @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+
+  @@index([ownerId])
+}
+
+enum RecoveryStatus {
+  STARTED
+  VERIFIED
+  FAILED
+  EXPIRED
+}
+
+model RecoveryCase {
+  id                     String         @id @default(uuid()) @db.Uuid
+  ownerId                String         @db.Uuid
+  method                 String
+  challengeHash          String         @unique
+  attempts               Int            @default(0)
+  verifiedAt             DateTime?      @db.Timestamptz(3)
+  financialReadOnlyUntil DateTime?      @db.Timestamptz(3)
+  revokedSessionsAt      DateTime?      @db.Timestamptz(3)
+  status                 RecoveryStatus @default(STARTED)
+  expiresAt              DateTime       @db.Timestamptz(3)
+  createdAt              DateTime       @default(now()) @db.Timestamptz(3)
+}
+
+model SecurityEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  ownerId       String?  @db.Uuid
+  actorDeviceId String?  @db.Uuid
+  type          String
+  resourceType  String?
+  resourceId    String?
+  ipMetadata    String?
+  decision      String
+  evidenceHash  String?
+  at            DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([ownerId, at])
+}
+
+model AuditEvent {
+  id               String   @id @default(uuid()) @db.Uuid
+  ownerId          String?  @db.Uuid
+  actorType        String
+  actorId          String?
+  action           String
+  resource         String?
+  decision         String
+  contextRedacted  Json     @default("{}")
+  correlationId    String?
+  at               DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([ownerId, at])
+}
+
+enum PolicyStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
+model LimitPolicy {
+  id                String       @id @default(uuid()) @db.Uuid
+  ownerId           String       @db.Uuid
+  perOperationMinor BigInt
+  rolling24hMinor   BigInt
+  // Références « effectives » : une hausse au-delà requiert 72 h (llm.md 8.2)
+  referencePerOperationMinor BigInt
+  referenceRolling24hMinor   BigInt
+  effectiveFrom     DateTime     @db.Timestamptz(3)
+  status            PolicyStatus @default(ACTIVE)
+  policyVersion     Int
+  createdAt         DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@unique([ownerId, policyVersion])
+}
+
+enum LimitChangeStatus {
+  PENDING
+  APPLIED
+  CANCELLED
+}
+
+model LimitChangeRequest {
+  id                     String            @id @default(uuid()) @db.Uuid
+  ownerId                String            @db.Uuid
+  oldPolicyId            String            @db.Uuid
+  proposedPerOperation   BigInt
+  proposedRolling24h     BigInt
+  kind                   String // DECREASE | INCREASE_WITHIN_REFERENCE | INCREASE_BEYOND_REFERENCE
+  requestedAt            DateTime          @db.Timestamptz(3)
+  effectiveAt            DateTime          @db.Timestamptz(3)
+  status                 LimitChangeStatus @default(PENDING)
+  authorizationId        String?           @db.Uuid
+  appliedPolicyId        String?           @db.Uuid
+}
+
+enum ExceptionState {
+  WAITING
+  ACTIVE
+  CONSUMED
+  EXPIRED
+  CANCELLED
+}
+
+model ExceptionAuthorization {
+  id                 String         @id @default(uuid()) @db.Uuid
+  ownerId            String         @db.Uuid
+  intentId           String         @db.Uuid
+  maxDebitMinor      BigInt
+  beneficiaryBinding String
+  reason             String
+  requestedAt        DateTime       @db.Timestamptz(3)
+  activeFrom         DateTime       @db.Timestamptz(3)
+  expiresAt          DateTime       @db.Timestamptz(3)
+  consumedAt         DateTime?      @db.Timestamptz(3)
+  cancelledAt        DateTime?      @db.Timestamptz(3)
+  state              ExceptionState @default(WAITING)
+  proofRef           String?
+  version            Int            @default(1)
+
+  @@index([ownerId, state])
+}
+
+// Défi + approbation signée (step-up). Un challenge = un nonce à usage unique lié à un digest d'opération.
+model SignedApproval {
+  id                 String    @id @default(uuid()) @db.Uuid
+  ownerId            String    @db.Uuid
+  deviceId           String    @db.Uuid
+  action             String
+  operationDigest    String
+  challengeNonceHash String    @unique
+  signatureDigest    String?
+  expiresAt          DateTime  @db.Timestamptz(3)
+  consumedAt         DateTime? @db.Timestamptz(3)
+  policySnapshot     Json      @default("{}")
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+}
+
+// ───────────────────────────── Registre comptable ─────────────────────────────
+
+enum LedgerAccountKind {
+  ASSET
+  LIABILITY
+  INCOME
+  EXPENSE
+  EQUITY
+  ALLOCATION
+  ALLOCATION_POOL
+  CLEARING
+}
+
+enum LedgerBook {
+  REAL // argent et patrimoine
+  ALLOCATION // affectations virtuelles (enveloppes) — ne crée jamais de fonds
+}
+
+model LedgerAccount {
+  id               String            @id @default(uuid()) @db.Uuid
+  ownerId          String            @db.Uuid
+  code             String
+  name             String
+  kind             LedgerAccountKind
+  book             LedgerBook        @default(REAL)
+  currency         String            @default("XOF")
+  parentId         String?           @db.Uuid
+  isPostingAllowed Boolean           @default(true)
+  status           String            @default("ACTIVE")
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  postings         LedgerPosting[]
+  balance          AccountBalance?
+
+  @@unique([ownerId, code])
+}
+
+model LedgerTransaction {
+  id                    String          @id @default(uuid()) @db.Uuid
+  ownerId               String          @db.Uuid
+  book                  LedgerBook      @default(REAL)
+  businessType          String
+  businessId            String
+  postingPurpose        String          @default("MAIN")
+  externalCorrelationId String?
+  postedAt              DateTime        @default(now()) @db.Timestamptz(3)
+  economicDate          DateTime        @db.Date
+  status                String          @default("POSTED")
+  reversalOfId          String?         @db.Uuid
+  memo                  String?
+  source                String          @default("OWNER")
+  actorDeviceId         String?         @db.Uuid
+  sequence              BigInt          @default(autoincrement())
+  postings              LedgerPosting[]
+
+  @@unique([businessType, businessId, postingPurpose])
+  @@index([ownerId, postedAt, id])
+}
+
+model LedgerPosting {
+  id               String            @id @default(uuid()) @db.Uuid
+  transactionId    String            @db.Uuid
+  transaction      LedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  ledgerAccountId  String            @db.Uuid
+  ledgerAccount    LedgerAccount     @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  signedAmountMinor BigInt
+  currency         String
+  postingOrdinal   Int
+
+  @@unique([transactionId, postingOrdinal])
+  @@index([ledgerAccountId])
+}
+
+model AccountBalance {
+  ledgerAccountId String        @id @db.Uuid
+  ledgerAccount   LedgerAccount @relation(fields: [ledgerAccountId], references: [id])
+  balanceMinor    BigInt        @default(0)
+  ledgerSequence  BigInt        @default(0)
+  version         Int           @default(0)
+  updatedAt       DateTime      @updatedAt @db.Timestamptz(3)
+}
+
+enum FinancialAccountType {
+  CONTROLLED_PSP
+  EXTERNAL_TRACKED
+  BROKER_CASH
+  CASH_MANUAL
+}
+
+enum BalanceVerification {
+  PROVIDER_VERIFIED
+  DOCUMENT_VERIFIED
+  USER_DECLARED
+  STALE
+  UNKNOWN
+}
+
+model FinancialAccount {
+  id                 String               @id @default(uuid()) @db.Uuid
+  ownerId            String               @db.Uuid
+  ledgerAccountId    String               @unique @db.Uuid
+  name               String
+  institution        String?
+  type               FinancialAccountType
+  currency           String               @default("XOF")
+  providerAccountId  String?
+  realBalanceGroupId String?              @db.Uuid
+  ownership          String               @default("OWNER")
+  verificationLevel  BalanceVerification  @default(USER_DECLARED)
+  lastVerifiedAt     DateTime?            @db.Timestamptz(3)
+  status             String               @default("ACTIVE")
+  includeInSpendable Boolean              @default(true)
+  colorHint          String?
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(3)
+  version            Int                  @default(1)
+
+  @@index([ownerId, status])
+}
+
+enum RealBalanceStatus {
+  ACTIVE
+  BLOCKED_OUTBOUND
+}
+
+model RealBalanceGroup {
+  id                 String            @id @default(uuid()) @db.Uuid
+  ownerId            String            @db.Uuid
+  name               String
+  providerId         String?
+  providerBalanceRef String?
+  verifiedBalanceMinor BigInt?
+  verifiedAt         DateTime?         @db.Timestamptz(3)
+  status             RealBalanceStatus @default(ACTIVE)
+  blockReason        String?
+  version            Int               @default(1)
+  createdAt          DateTime          @default(now()) @db.Timestamptz(3)
+}
+
+model ProviderBalanceSnapshot {
+  id                 String   @id @default(uuid()) @db.Uuid
+  realBalanceGroupId String   @db.Uuid
+  providerRef        String
+  balanceMinor       BigInt
+  asOf               DateTime @db.Timestamptz(3)
+  receivedAt         DateTime @default(now()) @db.Timestamptz(3)
+  source             String
+  rawDigest          String
+}
+
+enum WalletKind {
+  CURRENT
+  SAVINGS
+  RESERVE
+}
+
+model Wallet {
+  id                  String     @id @default(uuid()) @db.Uuid
+  ownerId             String     @db.Uuid
+  name                String
+  kind                WalletKind
+  currency            String     @default("XOF")
+  realBalanceGroupId  String?    @db.Uuid
+  allocationAccountId String?    @unique @db.Uuid
+  status              String     @default("ACTIVE")
+  createdAt           DateTime   @default(now()) @db.Timestamptz(3)
+  version             Int        @default(1)
+
+  @@index([ownerId, kind])
+}
+
+enum ReservationState {
+  ACTIVE
+  SETTLED
+  RELEASED
+}
+
+model AllocationReservation {
+  id          String           @id @default(uuid()) @db.Uuid
+  ownerId     String           @db.Uuid
+  walletId    String?          @db.Uuid
+  purposeType String // PURCHASE_PLAN | OBLIGATION | BUDGET
+  purposeId   String
+  amountMinor BigInt
+  state       ReservationState @default(ACTIVE)
+  releasedAt  DateTime?        @db.Timestamptz(3)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+
+  @@unique([purposeType, purposeId])
+}
+
+model FundsHold {
+  id                 String           @id @default(uuid()) @db.Uuid
+  ownerId            String           @db.Uuid
+  paymentIntentId    String           @unique @db.Uuid
+  realBalanceGroupId String?          @db.Uuid
+  financialAccountId String           @db.Uuid
+  amountMinor        BigInt
+  state              ReservationState @default(ACTIVE)
+  settledAt          DateTime?        @db.Timestamptz(3)
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+}
+
+model LimitHold {
+  id                String           @id @default(uuid()) @db.Uuid
+  ownerId           String           @db.Uuid
+  paymentIntentId   String           @unique @db.Uuid
+  amountDebitMinor  BigInt
+  windowAnchoredAt  DateTime         @db.Timestamptz(3)
+  state             ReservationState @default(ACTIVE)
+  settledAt         DateTime?        @db.Timestamptz(3)
+  releasedAt        DateTime?        @db.Timestamptz(3)
+
+  @@index([ownerId, windowAnchoredAt, state])
+}
+
+// ───────────────────────────── Paiements ─────────────────────────────
+
+enum PaymentDirection {
+  PAYIN
+  PAYOUT
+}
+
+enum PaymentState {
+  DRAFT
+  AWAITING_CONFIRMATION
+  AUTHORIZED
+  RESERVED
+  SUBMITTING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  UNKNOWN
+  REFUNDED_AFTER_SUCCESS
+}
+
+model PaymentIntent {
+  id                  String           @id @default(uuid()) @db.Uuid
+  ownerId             String           @db.Uuid
+  direction           PaymentDirection
+  sourceAccountId     String?          @db.Uuid
+  sourceWalletId      String?          @db.Uuid
+  destinationWalletId String?          @db.Uuid
+  destinationAccountId String?         @db.Uuid
+  beneficiaryId       String?          @db.Uuid
+  amountMode          String
+  amountNetMinor      BigInt
+  feeQuoteMinor       BigInt
+  totalDebitMinor     BigInt
+  currency            String           @default("XOF")
+  state               PaymentState     @default(DRAFT)
+  executable          Boolean          @default(false)
+  nonExecutableReason String?
+  currentAttemptId    String?          @db.Uuid
+  idempotencyKey      String
+  requestDigest       String
+  operationDigest     String?
+  policyVersion       Int?
+  exceptionId         String?          @db.Uuid
+  fundingStepId       String?          @db.Uuid
+  quoteExpiresAt      DateTime?        @db.Timestamptz(3)
+  authorizedAt        DateTime?        @db.Timestamptz(3)
+  executedAt          DateTime?        @db.Timestamptz(3)
+  purposeCategoryId   String?          @db.Uuid
+  clientReference     String?
+  createdAt           DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime         @updatedAt @db.Timestamptz(3)
+  version             Int              @default(1)
+  attempts            PaymentAttempt[]
+  history             PaymentStateHistory[]
+
+  @@unique([ownerId, direction, idempotencyKey])
+  @@index([ownerId, state])
+}
+
+model PaymentAttempt {
+  id                  String        @id @default(uuid()) @db.Uuid
+  intentId            String        @db.Uuid
+  intent              PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Restrict)
+  provider            String
+  merchantRef         String        @unique
+  providerRef         String?
+  state               String
+  submittedAt         DateTime?     @db.Timestamptz(3)
+  lastStatusCheckedAt DateTime?     @db.Timestamptz(3)
+  statusCheckCount    Int           @default(0)
+  resultEvidenceRef   String?
+  createdAt           DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([provider, providerRef])
+  @@index([provider, state, lastStatusCheckedAt])
+}
+
+model ProviderEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  provider        String
+  providerEventId String
+  attemptId       String?   @db.Uuid
+  payloadDigest   String
+  payloadRedacted Json
+  verified        Boolean
+  eventAt         DateTime? @db.Timestamptz(3)
+  receivedAt      DateTime  @default(now()) @db.Timestamptz(3)
+  processedAt     DateTime? @db.Timestamptz(3)
+  processState    String    @default("RECEIVED")
+  processNote     String?
+
+  @@unique([provider, providerEventId])
+}
+
+model PaymentStateHistory {
+  id          String        @id @default(uuid()) @db.Uuid
+  intentId    String        @db.Uuid
+  intent      PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Restrict)
+  from        PaymentState?
+  to          PaymentState
+  cause       String
+  evidenceRef String?
+  actor       String
+  at          DateTime      @default(now()) @db.Timestamptz(3)
+}
+
+model Beneficiary {
+  id                     String    @id @default(uuid()) @db.Uuid
+  ownerId                String    @db.Uuid
+  displayName            String
+  phoneE164              String
+  operator               String
+  officialName           String?
+  officialVerificationAt DateTime? @db.Timestamptz(3)
+  verificationSource     String    @default("NONE") // NONE | UNAVAILABLE | PROVIDER
+  isOwnAccount           Boolean   @default(false)
+  status                 String    @default("ACTIVE")
+  createdAt              DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@unique([ownerId, phoneE164, operator])
+}
+
+model PspAvailability {
+  id           String   @id @default(uuid()) @db.Uuid
+  provider     String
+  capability   String
+  state        String
+  checkedAt    DateTime @db.Timestamptz(3)
+  nextProbeAt  DateTime @db.Timestamptz(3)
+  failureCount Int      @default(0)
+
+  @@unique([provider, capability])
+}
+
+enum ReconciliationStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  DISMISSED_WITH_EVIDENCE
+}
+
+model ReconciliationCase {
+  id                  String               @id @default(uuid()) @db.Uuid
+  ownerId             String               @db.Uuid
+  realBalanceGroupId  String?              @db.Uuid
+  financialAccountId  String?              @db.Uuid
+  expectedMinor       BigInt
+  observedMinor       BigInt
+  currency            String               @default("XOF")
+  status              ReconciliationStatus @default(OPEN)
+  reason              String
+  openedAt            DateTime             @default(now()) @db.Timestamptz(3)
+  resolvedAt          DateTime?            @db.Timestamptz(3)
+  resolutionNote      String?
+  resolutionPostingId String?              @db.Uuid
+  version             Int                  @default(1)
+  evidence            ReconciliationEvidence[]
+}
+
+model ReconciliationEvidence {
+  id          String             @id @default(uuid()) @db.Uuid
+  caseId      String             @db.Uuid
+  case        ReconciliationCase @relation(fields: [caseId], references: [id])
+  kind        String
+  providerRef String?
+  documentId  String?            @db.Uuid
+  note        String?
+  digest      String
+  recordedAt  DateTime           @default(now()) @db.Timestamptz(3)
+}
+
+model IncomeFundingPlan {
+  id                String              @id @default(uuid()) @db.Uuid
+  ownerId           String              @db.Uuid
+  incomeId          String              @db.Uuid
+  status            String              @default("READY") // READY | RUNNING | PAUSED_FAILURE | PAUSED_UNKNOWN | COMPLETED | CANCELLED
+  lastCompletedStep Int                 @default(0)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  steps             IncomeFundingStep[]
+}
+
+model IncomeFundingStep {
+  id                  String            @id @default(uuid()) @db.Uuid
+  planId              String            @db.Uuid
+  plan                IncomeFundingPlan @relation(fields: [planId], references: [id])
+  ordinal             Int
+  destinationWalletId String            @db.Uuid
+  amountMinor         BigInt
+  paymentIntentId     String?           @db.Uuid
+  state               String            @default("PENDING") // PENDING | IN_FLIGHT | SUCCEEDED | FAILED | UNKNOWN | FROZEN | SKIPPED
+
+  @@unique([planId, ordinal])
+}
+
+// ───────────────────────────── Finances personnelles ─────────────────────────────
+
+model Income {
+  id              String             @id @default(uuid()) @db.Uuid
+  ownerId         String             @db.Uuid
+  accountId       String             @db.Uuid
+  source          String
+  nature          String             @default("SALARY") // SALARY | BUSINESS | GIFT | OTHER
+  economicDate    DateTime           @db.Date
+  grossMinor      BigInt
+  currency        String             @default("XOF")
+  mode            String             @default("EXTERNAL_TRACKING") // EXTERNAL_TRACKING | PSP_PAYIN
+  recordingStatus String             @default("RECORDED") // RECORDED | ALLOCATED
+  categoryId      String?            @db.Uuid
+  cycleId         String?            @db.Uuid
+  externalRef     String?
+  note            String?
+  ledgerTransactionId String?        @db.Uuid
+  createdAt       DateTime           @default(now()) @db.Timestamptz(3)
+  version         Int                @default(1)
+  allocations     IncomeAllocation[]
+
+  @@index([ownerId, economicDate])
+}
+
+model IncomeAllocation {
+  id          String    @id @default(uuid()) @db.Uuid
+  incomeId    String    @db.Uuid
+  income      Income    @relation(fields: [incomeId], references: [id])
+  walletId    String    @db.Uuid
+  amountMinor BigInt
+  confirmedAt DateTime? @db.Timestamptz(3)
+  suggestedBy String    @default("OWNER")
+}
+
+model Expense {
+  id                  String   @id @default(uuid()) @db.Uuid
+  ownerId             String   @db.Uuid
+  accountId           String   @db.Uuid
+  ledgerTransactionId String?  @db.Uuid
+  categoryId          String   @db.Uuid
+  economicDate        DateTime @db.Date
+  amountMinor         BigInt
+  currency            String   @default("XOF")
+  label               String
+  merchant            String?
+  source              String   @default("MANUAL") // MANUAL | IMPORT | PAYOUT | OBLIGATION
+  externalRef         String?
+  cycleId             String?  @db.Uuid
+  offCycle            Boolean  @default(false)
+  status              String   @default("POSTED") // POSTED | REVERSED
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+  version             Int      @default(1)
+
+  @@index([ownerId, economicDate])
+}
+
+model Category {
+  id        String  @id @default(uuid()) @db.Uuid
+  ownerId   String  @db.Uuid
+  name      String
+  type      String // EXPENSE | INCOME
+  parentId  String? @db.Uuid
+  icon      String?
+  essential Boolean @default(false)
+  keywords  String[] @default([])
+  active    Boolean @default(true)
+
+  @@unique([ownerId, type, name])
+}
+
+enum CycleState {
+  OPEN
+  CLOSED
+}
+
+model BudgetCycle {
+  id             String     @id @default(uuid()) @db.Uuid
+  ownerId        String     @db.Uuid
+  label          String
+  startsAt       DateTime   @db.Date
+  plannedEndAt   DateTime   @db.Date
+  closedAt       DateTime?  @db.Timestamptz(3)
+  state          CycleState @default(OPEN)
+  openedManually Boolean    @default(true)
+  anchorIncomeId String?    @db.Uuid
+  closingSnapshot Json?
+  version        Int        @default(1)
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
+  budgets        Budget[]
+
+  @@index([ownerId, state])
+}
+
+model Budget {
+  id             String      @id @default(uuid()) @db.Uuid
+  ownerId        String      @db.Uuid
+  cycleId        String      @db.Uuid
+  cycle          BudgetCycle @relation(fields: [cycleId], references: [id])
+  categoryId     String      @db.Uuid
+  plannedMinor   BigInt
+  alertThreshold Int         @default(80) // %
+  essential      Boolean     @default(false)
+  version        Int         @default(1)
+
+  @@unique([cycleId, categoryId])
+}
+
+model RecurringObligation {
+  id           String   @id @default(uuid()) @db.Uuid
+  ownerId      String   @db.Uuid
+  label        String
+  kind         String // RENT | UTILITY | SUBSCRIPTION | LOAN | OTHER
+  amountMinor  BigInt
+  currency     String   @default("XOF")
+  scheduleRule String // MONTHLY:<day> | WEEKLY:<dow> | EVERY_N_DAYS:<n>
+  nextDueDate  DateTime @db.Date
+  categoryId   String   @db.Uuid
+  essential    Boolean  @default(true)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  occurrences  ObligationOccurrence[]
+}
+
+model ObligationOccurrence {
+  id               String              @id @default(uuid()) @db.Uuid
+  obligationId     String              @db.Uuid
+  obligation       RecurringObligation @relation(fields: [obligationId], references: [id])
+  dueDate          DateTime            @db.Date
+  expectedMinor    BigInt
+  settledExpenseId String?             @unique @db.Uuid
+  state            String              @default("FORECAST") // FORECAST | DUE | SETTLED | SKIPPED
+
+  @@unique([obligationId, dueDate])
+}
+
+// ───────────────────────────── Épargne ─────────────────────────────
+
+model SavingsGoal {
+  id                    String   @id @default(uuid()) @db.Uuid
+  ownerId               String   @db.Uuid
+  walletId              String   @unique @db.Uuid
+  name                  String
+  icon                  String?
+  targetMinor           BigInt
+  deadline              DateTime @db.Date
+  protectionMode        String   @default("ADVISORY") // ADVISORY | ENFORCEABLE
+  protectionEvidenceRef String?
+  status                String   @default("ACTIVE") // ACTIVE | TARGET_REACHED | LATE | RELEASED | ARCHIVED
+  deadlineHistory       Json     @default("[]")
+  createdAt             DateTime @default(now()) @db.Timestamptz(3)
+  version               Int      @default(1)
+  plan                  SavingsContributionPlan?
+  contributions         PlannedContribution[]
+  withdrawals           SavingsWithdrawalRequest[]
+}
+
+model SavingsContributionPlan {
+  id           String      @id @default(uuid()) @db.Uuid
+  goalId       String      @unique @db.Uuid
+  goal         SavingsGoal @relation(fields: [goalId], references: [id])
+  triggerType  String // CALENDAR | INCOME_TRIGGER
+  amountRule   String // FIXED:<minor> | PERCENT:<bp>
+  scheduleRule String? // MONTHLY:<day> | WEEKLY:<dow>
+  active       Boolean     @default(true)
+}
+
+model PlannedContribution {
+  id                 String      @id @default(uuid()) @db.Uuid
+  goalId             String      @db.Uuid
+  goal               SavingsGoal @relation(fields: [goalId], references: [id])
+  dueAt              DateTime    @db.Date
+  plannedMinor       BigInt
+  state              String      @default("PLANNED") // PLANNED | DUE | CONFIRMED | MISSED | CANCELLED
+  kind               String      @default("SCHEDULED") // SCHEDULED | CATCH_UP | INCOME | MANUAL
+  sourceIncomeId     String?     @db.Uuid
+  actualAllocationTxId String?   @db.Uuid
+  confirmedMinor     BigInt?
+  confirmedAt        DateTime?   @db.Timestamptz(3)
+  slotKey            String // SCHEDULED:<date> | INCOME:<incomeId> | MANUAL:<uuid>
+
+  @@unique([goalId, slotKey])
+}
+
+model SavingsWithdrawalRequest {
+  id                String      @id @default(uuid()) @db.Uuid
+  ownerId           String      @db.Uuid
+  goalId            String      @db.Uuid
+  goal              SavingsGoal @relation(fields: [goalId], references: [id])
+  kind              String // ORDINARY | EXCEPTIONAL
+  requestedMinor    BigInt
+  reason            String?
+  requestedAt       DateTime    @db.Timestamptz(3)
+  eligibleAt        DateTime    @db.Timestamptz(3)
+  confirmedAt       DateTime?   @db.Timestamptz(3)
+  executedAt        DateTime?   @db.Timestamptz(3)
+  status            String      @default("WAITING") // WAITING | ELIGIBLE | EXECUTED | CANCELLED | REJECTED
+  baseSnapshotMinor BigInt
+  holdMinor         BigInt
+  allocationTxId    String?     @db.Uuid
+  version           Int         @default(1)
+
+  @@index([goalId, requestedAt, status])
+}
+
+// ───────────────────────────── Dettes et créances ─────────────────────────────
+
+model Liability {
+  id               String   @id @default(uuid()) @db.Uuid
+  ownerId          String   @db.Uuid
+  kind             String // DEBT | RECEIVABLE | FUTURE_COMMITMENT
+  counterpartyName String
+  label            String
+  principalMinor   BigInt
+  currency         String   @default("XOF")
+  interestTerms    String?
+  startDate        DateTime @db.Date
+  initialDueDate   DateTime? @db.Date
+  state            String   @default("ACTIVE") // ACTIVE | SETTLED | DEFAULTED | CANCELLED
+  ledgerAccountId  String?  @db.Uuid
+  cashAccountId    String?  @db.Uuid
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  version          Int      @default(1)
+  installments     LiabilityInstallment[]
+  repayments       Repayment[]
+}
+
+model LiabilityInstallment {
+  id               String    @id @default(uuid()) @db.Uuid
+  liabilityId      String    @db.Uuid
+  liability        Liability @relation(fields: [liabilityId], references: [id])
+  dueDate          DateTime  @db.Date
+  principalDueMinor BigInt
+  interestDueMinor BigInt    @default(0)
+  version          Int       @default(1)
+  state            String    @default("SCHEDULED") // SCHEDULED | PAID | PARTIAL | LATE | RESCHEDULED
+  rescheduledFrom  String?   @db.Uuid
+  note             String?
+}
+
+model Repayment {
+  id                String    @id @default(uuid()) @db.Uuid
+  liabilityId       String    @db.Uuid
+  liability         Liability @relation(fields: [liabilityId], references: [id])
+  paymentOrLedgerRef String?
+  cashAccountId     String    @db.Uuid
+  principalMinor    BigInt
+  interestMinor     BigInt    @default(0)
+  feeMinor          BigInt    @default(0)
+  confirmedByOwner  Boolean   @default(true)
+  at                DateTime  @db.Date
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+}
+
+// ───────────────────────────── Patrimoine et marchés ─────────────────────────────
+
+model PhysicalAsset {
+  id                   String           @id @default(uuid()) @db.Uuid
+  ownerId              String           @db.Uuid
+  name                 String
+  kind                 String // REAL_ESTATE | VEHICLE | EQUIPMENT | OTHER
+  acquiredAt           DateTime?        @db.Date
+  acquisitionCostMinor BigInt?
+  currency             String           @default("XOF")
+  status               String           @default("HELD") // HELD | SOLD | DISPOSED
+  ledgerAccountId      String?          @db.Uuid
+  createdAt            DateTime         @default(now()) @db.Timestamptz(3)
+  valuations           AssetValuation[]
+}
+
+model AssetValuation {
+  id                 String        @id @default(uuid()) @db.Uuid
+  assetId            String        @db.Uuid
+  asset              PhysicalAsset @relation(fields: [assetId], references: [id])
+  valueMinor         BigInt
+  valuationDate      DateTime      @db.Date
+  source             String // PURCHASE_PRICE | OWNER_ESTIMATE | PROFESSIONAL | MARKET_COMPARABLE
+  note               String?
+  evidenceDocumentId String?       @db.Uuid
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+}
+
+model Broker {
+  id         String  @id @default(uuid()) @db.Uuid
+  ownerId    String  @db.Uuid
+  name       String
+  notes      String?
+  officialId String?
+  costBasisMethod String @default("FALLBACK_WEIGHTED_AVERAGE") // SGI_DOCUMENTED | FALLBACK_WEIGHTED_AVERAGE
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  accounts   BrokerageAccount[]
+}
+
+model BrokerageAccount {
+  id                     String  @id @default(uuid()) @db.Uuid
+  ownerId                String  @db.Uuid
+  brokerId               String  @db.Uuid
+  broker                 Broker  @relation(fields: [brokerId], references: [id])
+  cashFinancialAccountId String  @unique @db.Uuid
+  securitiesLedgerAccountId String @unique @db.Uuid
+  accountAlias           String
+  currency               String  @default("XOF")
+}
+
+model Security {
+  id       String  @id @default(uuid()) @db.Uuid
+  symbol   String  @unique
+  isin     String?
+  market   String  @default("BRVM")
+  name     String
+  sector   String?
+  currency String  @default("XOF")
+  status   String  @default("LISTED")
+  source   String  @default("OWNER_ENTERED")
+  favoriteOwnerIds String[] @default([])
+}
+
+model Trade {
+  id                 String   @id @default(uuid()) @db.Uuid
+  ownerId            String   @db.Uuid
+  brokerageAccountId String   @db.Uuid
+  securityId         String   @db.Uuid
+  side               String // BUY | SELL
+  quantity           Decimal  @db.Decimal(28, 10)
+  unitPrice          Decimal  @db.Decimal(28, 10)
+  grossMinor         BigInt
+  feesMinor          BigInt   @default(0)
+  taxesMinor         BigInt   @default(0)
+  executedAt         DateTime @db.Timestamptz(3)
+  settledAt          DateTime? @db.Timestamptz(3)
+  evidenceRef        String?
+  importRowId        String?  @unique @db.Uuid
+  externalRef        String?
+  realizedPnlMinor   BigInt?
+  costMethod         String
+  ledgerTransactionId String? @db.Uuid
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([brokerageAccountId, externalRef])
+}
+
+model CostBasisLot {
+  id                String  @id @default(uuid()) @db.Uuid
+  ownerId           String  @db.Uuid
+  tradeId           String  @unique @db.Uuid
+  brokerageAccountId String @db.Uuid
+  securityId        String  @db.Uuid
+  quantityRemaining Decimal @db.Decimal(28, 10)
+  costMinor         BigInt
+  method            String
+  officialStatus    String // SGI_VERIFIED | INDICATIVE
+}
+
+model DividendAnnouncement {
+  id               String   @id @default(uuid()) @db.Uuid
+  securityId       String   @db.Uuid
+  declaredPerShare Decimal  @db.Decimal(28, 10)
+  exDate           DateTime? @db.Date
+  recordDate       DateTime? @db.Date
+  paymentDate      DateTime? @db.Date
+  source           String
+  confidence       String   @default("OWNER_ENTERED")
+  status           String   @default("ANNOUNCED")
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+}
+
+model DividendEntitlement {
+  id                 String  @id @default(uuid()) @db.Uuid
+  ownerId            String  @db.Uuid
+  announcementId     String  @db.Uuid
+  brokerageAccountId String  @db.Uuid
+  quantityEligible   Decimal? @db.Decimal(28, 10)
+  expectedMinor      BigInt?
+  status             String  @default("ENTITLEMENT_EVALUATED") // ENTITLEMENT_EVALUATED | DUE | RECEIVED | RECONCILED | CANCELLED
+
+  @@unique([announcementId, brokerageAccountId])
+}
+
+model DividendReceipt {
+  id                      String   @id @default(uuid()) @db.Uuid
+  ownerId                 String   @db.Uuid
+  entitlementId           String?  @unique @db.Uuid
+  cashLedgerTransactionId String   @unique @db.Uuid
+  receivedMinor           BigInt
+  receivedAt              DateTime @db.Date
+}
+
+model MarketQuote {
+  id          String   @id @default(uuid()) @db.Uuid
+  securityId  String   @db.Uuid
+  price       Decimal  @db.Decimal(28, 10)
+  currency    String   @default("XOF")
+  asOf        DateTime @db.Timestamptz(3)
+  sessionDate DateTime @db.Date
+  sourceId    String // MANUAL | <provider>
+  quality     String // OFFICIAL | AGGREGATED | DELAYED | MANUAL_UNVERIFIED
+  changePct   Decimal? @db.Decimal(12, 4)
+  volume      BigInt?
+  receivedAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([securityId, sessionDate, sourceId])
+}
+
+model PurchasePlan {
+  id                      String   @id @default(uuid()) @db.Uuid
+  ownerId                 String   @db.Uuid
+  securityId              String   @db.Uuid
+  quantityTarget          Decimal? @db.Decimal(28, 10)
+  budgetReservedMinor     BigInt
+  allocationReservationId String?  @db.Uuid
+  targetDate              DateTime? @db.Date
+  note                    String?
+  state                   String   @default("ACTIVE") // ACTIVE | EXECUTED_EXTERNALLY | CANCELLED
+  createdAt               DateTime @default(now()) @db.Timestamptz(3)
+}
+
+model PriceAlert {
+  id              String    @id @default(uuid()) @db.Uuid
+  ownerId         String    @db.Uuid
+  securityId      String    @db.Uuid
+  triggerType     String // ABOVE | BELOW
+  threshold       Decimal   @db.Decimal(28, 10)
+  lastTriggeredAt DateTime? @db.Timestamptz(3)
+  enabled         Boolean   @default(true)
+}
+
+// ───────────────────────────── Documents, imports, sync, notifications ─────────────────────────────
+
+model DocumentAttachment {
+  id             String   @id @default(uuid()) @db.Uuid
+  ownerId        String   @db.Uuid
+  storageKey     String   @unique
+  cipherKeyRef   String
+  originalName   String
+  mimeDeclared   String
+  mimeDetected   String?
+  sizeBytes      Int
+  sha256         String?
+  linkedResource String?
+  retentionClass String   @default("DOCUMENT")
+  state          String   @default("PENDING_UPLOAD") // PENDING_UPLOAD | ACTIVE | REJECTED | DELETED
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+}
+
+model DocumentAccessGrant {
+  id         String   @id @default(uuid()) @db.Uuid
+  documentId String   @db.Uuid
+  tokenHash  String   @unique
+  expiresAt  DateTime @db.Timestamptz(3)
+  usedAt     DateTime? @db.Timestamptz(3)
+}
+
+model ImportBatch {
+  id            String      @id @default(uuid()) @db.Uuid
+  ownerId       String      @db.Uuid
+  documentId    String?     @db.Uuid
+  sourceType    String // BANK_CSV | SGI_TRADES_CSV
+  targetAccountId String?   @db.Uuid
+  formatVersion String      @default("1")
+  status        String      @default("UPLOADED") // UPLOADED | VALIDATING | PREVIEW_READY | REVIEWED | COMMITTED | REJECTED
+  rowCount      Int         @default(0)
+  fileDigest    String
+  errorSummary  String?
+  confirmedAt   DateTime?   @db.Timestamptz(3)
+  createdAt     DateTime    @default(now()) @db.Timestamptz(3)
+  rows          ImportRow[]
+}
+
+model ImportRow {
+  id                  String      @id @default(uuid()) @db.Uuid
+  batchId             String      @db.Uuid
+  batch               ImportBatch @relation(fields: [batchId], references: [id])
+  rowNumber           Int
+  canonicalDigest     String
+  normalizedData      Json
+  classification      String // NEW | MATCHED | POSSIBLE_DUPLICATE | INVALID
+  validationErrors    String?
+  matchedResourceId   String?
+  decision            String? // COMMIT | SKIP
+  postedResourceId    String?
+  postedTransactionId String?     @db.Uuid
+
+  @@unique([batchId, rowNumber])
+  @@index([canonicalDigest])
+}
+
+model OfflineDraftRecord {
+  id                   String    @id @default(uuid()) @db.Uuid
+  ownerId              String    @db.Uuid
+  deviceId             String?   @db.Uuid
+  sessionFamilyId      String    @db.Uuid
+  clientDraftId        String
+  targetResource       String // EXPENSE | INCOME | SAVINGS_GOAL_META | ASSET | LIABILITY
+  operation            String // CREATE | UPDATE
+  targetId             String?
+  baseVersion          Int?
+  payload              Json
+  canonicalPayloadHash String
+  state                String    @default("REVIEW_REQUIRED") // REVIEW_REQUIRED | APPLIED | CONFLICT | REJECTED | DISCARDED
+  validation           Json      @default("[]")
+  resultResourceId     String?
+  confirmedAt          DateTime? @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@unique([sessionFamilyId, clientDraftId])
+}
+
+model SyncEvent {
+  sequence     BigInt   @id @default(autoincrement())
+  ownerId      String   @db.Uuid
+  resourceType String
+  resourceId   String
+  eventType    String
+  visibility   String   @default("OWNER")
+  version      Int?
+  occurredAt   DateTime @default(now()) @db.Timestamptz(3)
+  payloadDigest String
+
+  @@index([ownerId, sequence])
+}
+
+model Notification {
+  id            String    @id @default(uuid()) @db.Uuid
+  ownerId       String    @db.Uuid
+  sourceEventId String
+  type          String
+  category      String // SECURITY | PAYMENT | RECONCILIATION | SAVINGS | BUDGET | LIABILITY | MARKET | SYSTEM
+  priority      String // CRITICAL | HIGH | NORMAL | LOW
+  titleKey      String
+  title         String
+  body          String
+  metadataSafe  Json      @default("{}")
+  link          String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  readAt        DateTime? @db.Timestamptz(3)
+  deliveries    NotificationDelivery[]
+
+  @@unique([ownerId, sourceEventId])
+  @@index([ownerId, createdAt])
+}
+
+model NotificationDelivery {
+  id                      String       @id @default(uuid()) @db.Uuid
+  notificationId          String       @db.Uuid
+  notification            Notification @relation(fields: [notificationId], references: [id])
+  channel                 String // PUSH | EMAIL
+  deliveryIdempotencyKey  String       @unique
+  attempts                Int          @default(0)
+  status                  String       @default("PENDING") // PENDING | SENT | FAILED | NOT_CONFIGURED | DEAD_LETTER
+  lastError               String?
+  lastAttemptAt           DateTime?    @db.Timestamptz(3)
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  ownerId       String?   @db.Uuid
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  publishedAt   DateTime? @db.Timestamptz(3)
+  claimedAt     DateTime? @db.Timestamptz(3)
+  attemptCount  Int       @default(0)
+  lastError     String?
+
+  @@index([publishedAt, createdAt])
+}
+
+model ProcessedEvent {
+  consumerName String
+  eventId      String
+  processedAt  DateTime @default(now()) @db.Timestamptz(3)
+  resultDigest String?
+
+  @@id([consumerName, eventId])
+}
+
+model IdempotencyRecord {
+  id            String   @id @default(uuid()) @db.Uuid
+  ownerId       String   @db.Uuid
+  operation     String
+  key           String
+  requestDigest String
+  responseStatus Int?
+  responseBody  Json?
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([ownerId, operation, key])
+}
+
+model JobRun {
+  id        String   @id @default(uuid()) @db.Uuid
+  job       String
+  runKey    String
+  startedAt DateTime @default(now()) @db.Timestamptz(3)
+  result    String?
+
+  @@unique([job, runKey])
+}
+
+/// Jeton FCM d'un appareil de confiance (un appareil peut en avoir un seul actif).
+model PushDeviceToken {
+  id         String   @id @default(uuid()) @db.Uuid
+  ownerId    String   @db.Uuid
+  deviceId   String   @db.Uuid
+  token      String   @unique
+  platform   String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  lastSeenAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([ownerId])
+  @@index([deviceId])
+}

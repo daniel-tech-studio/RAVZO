@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "170170355361",
+    "project_id": "ravzo-fbe55",
+    "storage_bucket": "ravzo-fbe55.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:170170355361:android:116b56deca4cd6ff846ae0",
+        "android_client_info": {
+          "package_name": "bj.ravzo.ravzo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB4WMwlvirRPXD-S8niLz84UHxWwWym5mA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
