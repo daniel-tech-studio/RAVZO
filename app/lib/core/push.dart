@@ -34,7 +34,7 @@ class PushReceiver {
       if (perm.authorizationStatus == AuthorizationStatus.denied) { _set('Refusées dans les réglages du système'); return; }
       if (Platform.isIOS || Platform.isMacOS) {
         final apns = await fm.getAPNSToken().timeout(const Duration(seconds: 8), onTimeout: () => null);
-        if (apns == null) { _set('En attente de la clé APNs (compte Apple Developer)'); _listen(); return; }
+        if (apns == null) { _set('Non disponibles sur cet appareil'); _listen(); return; }
       }
       final token = await fm.getToken();
       if (token == null) { _set('Jeton indisponible'); return; }
@@ -44,13 +44,13 @@ class PushReceiver {
     } on ApiError catch (e) { _set('Inscription refusée : ${e.message}'); }
     catch (e) {
       final t = e.toString();
-      _set(t.contains('apns-token-not-set') ? 'En attente de la clé APNs (compte Apple Developer)' : 'Indisponible : ${t.split('\n').first.substring(0, t.split('\n').first.length.clamp(0, 80))}');
+      _set(t.contains('apns-token-not-set') ? 'Non disponibles sur cet appareil' : 'Indisponibles pour le moment');
     }
   }
 
   Future<void> _register(String token) async {
     final r = await api.post('/notifications/push-devices', {'token': token, 'platform': _platform});
-    _set(r['configured'] == true ? 'Activées' : 'Inscrit — envoi non configuré sur le serveur');
+    _set(r['configured'] == true ? 'Activées' : 'Indisponibles pour le moment');
   }
 
   void _listen() {

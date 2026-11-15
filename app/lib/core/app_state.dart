@@ -70,9 +70,6 @@ class AppState extends ChangeNotifier {
     cursor = store.get<String>('cursor');
     final ls = store.get<String>('lastSync');
     lastSync = ls == null ? null : DateTime.tryParse(ls);
-    final url = store.get<String>('apiBase');
-    // Une adresse locale mémorisée (développement) ne remplace jamais le serveur de production compilé.
-    if (url != null && url.startsWith('https://')) api.baseUrl = url;
     await api.loadTokens();
     if (!api.hasSession) { phase = SessionPhase.signedOut; notifyListeners(); return; }
     await refreshMe();
@@ -100,7 +97,6 @@ class AppState extends ChangeNotifier {
   void setWidgets(List<String> order, Set<String> hidden) { widgetOrder = order; hiddenWidgets = hidden; savePrefs(); notifyListeners(); }
   /// UX02 : raccourcis adaptés à l'usage — on compte, on ne lance jamais rien automatiquement.
   void countAction(String id) { actionUsage[id] = (actionUsage[id] ?? 0) + 1; savePrefs(); }
-  Future<void> setApiBase(String url) async { api.baseUrl = url; await store.put('apiBase', url); }
 
   // ─── Session ───
   Future<Map> login(String email, String password, String deviceName) async {

@@ -18,7 +18,6 @@ class PaymentsTab extends StatelessWidget {
       final p = c.pal;
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (caps['provider'] != 'fake' && caps['provider'] != 'none') ...[_ProviderCard(caps: caps), gap(12)],
-        if (caps['realMoney'] != true && caps['provider'] != 'feexpay') InfoBanner(caps['executionMode'] == 'SANDBOX_FAKE' ? 'Bac à sable : prestataire SIMULÉ. Aucun argent réel ne circule ; les paiements réels restent désactivés tant qu’un prestataire n’est pas contractuellement autorisé et vérifié.' : 'Paiements réels non activés. Vous pouvez préparer des brouillons non exécutables ; le reste de l’application fonctionne normalement.', icon: Icons.science_outlined, color: p.info),
         gap(12),
         AppCard(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [Text('Plafonds', style: sora(16, color: p.ink)), const Spacer(), TextButton(onPressed: () => c.push('/security/limits'), child: const Text('Gérer'))]),
@@ -31,12 +30,11 @@ class PaymentsTab extends StatelessWidget {
         FilledButton.icon(onPressed: bens.isEmpty ? () => openBeneficiaryForm(c) : () => openPayoutFlow(c), icon: const Icon(Icons.north_east_rounded), label: Text(bens.isEmpty ? 'Ajouter un bénéficiaire' : 'Nouveau paiement')),
         gap(),
         SectionTitle('Bénéficiaires', trailing: TextButton.icon(onPressed: () => openBeneficiaryForm(c), icon: const Icon(Icons.person_add_alt_rounded), label: const Text('Ajouter'))),
-        if (bens.isNotEmpty) AppCard(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6), child: Column(children: [for (final b in bens) ListRow(leading: IconBadge(b['isOwnAccount'] ? Icons.person_rounded : Icons.person_outline_rounded), title: b['displayName'], subtitle: '${b['phoneE164']} · ${b['operator']}', trailing: b['officialVerificationAt'] != null ? const Pill('Nom officiel vérifié', icon: Icons.verified_rounded) : Pill('Nom non vérifié', color: p.warning, icon: Icons.help_outline_rounded))])),
+        if (bens.isNotEmpty) AppCard(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6), child: Column(children: [for (final b in bens) ListRow(leading: IconBadge(b['isOwnAccount'] ? Icons.person_rounded : Icons.person_outline_rounded), title: b['displayName'], subtitle: '${b['phoneE164']} · ${_opLabels[b['operator']] ?? b['operator']}', trailing: b['officialVerificationAt'] != null ? const Pill('Nom officiel vérifié', icon: Icons.verified_rounded) : Pill('Nom non vérifié', color: p.warning, icon: Icons.help_outline_rounded))])),
         gap(),
         const SectionTitle('Paiements'),
         if (intents.isEmpty) Text('Aucun paiement.', style: inter(14, color: p.inkMuted))
         else AppCard(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6), child: Column(children: [for (final i in intents) ListRow(leading: IconBadge(i['direction'] == 'PAYOUT' ? Icons.north_east_rounded : Icons.south_west_rounded, color: stateColor(c, i['state'])), title: i['direction'] == 'PAYOUT' ? 'Paiement sortant' : 'Dépôt', subtitle: fmtDateTime(i['createdAt']), trailing: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Money(i['totalDebitMinor'], size: 14), StatePill(i['state'])]), onTap: () => c.push('/money/payments/${i['id']}'))])),
-        if (caps['executionMode'] == 'SANDBOX_FAKE') ...[gap(), _SandboxTools()],
       ]);
     }),
   ]);
@@ -44,13 +42,9 @@ class PaymentsTab extends StatelessWidget {
 
 /// Motifs de non-exécution, en clair.
 String reasonLabel(String? r) => switch (r) {
-  'PAYMENTS_LIVE_DISABLED' => 'Paiements réels désactivés côté serveur (PAYMENTS_LIVE_ENABLED)',
-  'PSP_FEES_UNCONFIGURED' => 'Barème de frais du contrat non renseigné',
-  'PSP_NOT_CONFIGURED' => 'Aucun prestataire configuré',
-  'NO_CONTROLLED_PSP_ACCOUNT' => 'Compte du prestataire non relié',
-  'FAKE_FORBIDDEN' => 'Prestataire simulé interdit en production',
-  null => '—',
-  _ => r,
+  'NO_CONTROLLED_PSP_ACCOUNT' => 'Reliez d’abord votre compte Mobile Money',
+  null => '',
+  _ => 'Les paiements sont momentanément indisponibles',
 };
 
 const _opLabels = {'MTN_BJ': 'MTN Bénin', 'MOOV_BJ': 'Moov Africa Bénin', 'CELTIIS_BJ': 'Celtiis'};
@@ -62,7 +56,6 @@ class _ProviderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
-    final live = caps['executionMode'] == 'LIVE' || caps['mode'] == 'LIVE';
     final name = caps['provider'] == 'feexpay' ? 'FeexPay' : '${caps['provider']}';
     return AppCard(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
@@ -70,15 +63,15 @@ class _ProviderCard extends StatelessWidget {
         const SizedBox(width: 12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(name, style: sora(16, color: p.ink)),
-          Text(live ? 'Production — argent réel' : 'Sandbox — aucun argent réel', style: inter(13, color: live ? p.copper : p.inkMuted)),
+          Text('Mobile Money — MTN, Moov, Celtiis', style: inter(13, color: p.inkMuted)),
         ])),
         caps['executable'] == true ? const Pill('Paiements actifs', icon: Icons.check_circle_rounded) : Pill('Paiements bloqués', color: p.warning, icon: Icons.lock_outline_rounded),
       ]),
-      if (caps['executable'] != true) ...[gap(8), Text('Motif : ${reasonLabel(caps['nonExecutableReason'])}', style: inter(13, color: p.inkMuted))],
+      if (caps['executable'] != true) ...[gap(8), Text(reasonLabel(caps['nonExecutableReason']), style: inter(13, color: p.inkMuted))],
       gap(12),
       Loader<List>(load: (a) async {
         final accounts = (await a.api.get('/accounts')) as List;
-        final linked = accounts.where((x) => x['type'] == 'CONTROLLED_PSP' && x['providerAccountId'] != null && !(x['institution'] ?? '').toString().contains('simulé')).toList();
+        final linked = accounts.where((x) => x['type'] == 'CONTROLLED_PSP' && x['providerAccountId'] != null).toList();
         Object? bal;
         try { bal = await a.api.get('/payments/provider/balance'); } catch (e) { bal = e.toString(); }
         return [linked, bal];
@@ -89,7 +82,7 @@ class _ProviderCard extends StatelessWidget {
             for (final e in (bal['channels'] as Map).entries) KeyValue('Solde ${_opLabels[e.key] ?? e.key}', Money(e.value)),
             KeyValue('Total chez $name', Money(bal['totalMinor'])),
             Text('Le solde est tenu par réseau : un paiement MTN exige du solde sur le canal MTN.', style: inter(12, color: p.inkMuted)),
-          ] else Text('Solde $name illisible : $bal', style: inter(13, color: p.warning)),
+          ] else Text('Solde $name momentanément indisponible', style: inter(13, color: p.warning)),
           gap(10),
           if (linked.isEmpty) FilledButton.tonalIcon(onPressed: () async {
             await run(c, () => c.appRead.api.post('/payments/provider/connect', {}), success: 'Compte $name relié');
@@ -100,18 +93,6 @@ class _ProviderCard extends StatelessWidget {
       }),
     ]));
   }
-}
-
-class _SandboxTools extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => AppCard(color: context.pal.info.withValues(alpha: .06), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-    Row(children: [Icon(Icons.science_outlined, color: context.pal.info), const SizedBox(width: 8), Text('Outils du bac à sable (développement)', style: sora(15, color: context.pal.ink))]),
-    gap(8), Text('Crée un compte prestataire FICTIF pour exercer la machine d’états (incertain, webhooks, plafonds). Jamais disponible en production.', style: inter(13, color: context.pal.inkMuted)),
-    gap(10), Wrap(spacing: 8, runSpacing: 8, children: [
-      OutlinedButton(onPressed: () async { await run(context, () => context.appRead.api.post('/payments/sandbox/provision', {'name': 'MoMo test', 'openingMinor': '200000'}), success: 'Compte simulé créé'); if (context.mounted) context.appRead.bump(); }, child: const Text('Créer un compte simulé')),
-      for (final s in ['ACCEPT', 'ACCEPT_AND_SUCCEED', 'TIMEOUT_EXECUTED', 'REJECT']) OutlinedButton(onPressed: () => run(context, () => context.appRead.api.post('/payments/sandbox/scenario', {'scenario': s}), success: 'Scénario : $s'), child: Text(s)),
-    ]),
-  ]));
 }
 
 Future<void> openBeneficiaryForm(BuildContext context) {
@@ -178,12 +159,12 @@ class _PayoutFlowState extends State<_PayoutFlow> {
     final over = lim['wouldExceedPerOperation'] == true || lim['wouldExceedRolling'] == true;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       AppCard(color: p.surfaceAlt, child: Column(children: [
-        KeyValue('Bénéficiaire', Text(b['displayName'], style: inter(14.5, w: FontWeight.w700, color: p.ink))), KeyValue('Numéro', Text('${b['phoneE164']} · ${b['operator']}')),
+        KeyValue('Bénéficiaire', Text(b['displayName'], style: inter(14.5, w: FontWeight.w700, color: p.ink))), KeyValue('Numéro', Text('${b['phoneE164']} · ${_opLabels[b['operator']] ?? b['operator']}')),
         const Divider(height: 18), KeyValue('Montant reçu', Money(i['amountNetMinor'])), KeyValue('Frais estimés', Money(i['feeQuoteMinor'])), KeyValue('Total débité', Money(i['totalDebitMinor'], size: 18, weight: FontWeight.w700)),
         KeyValue('Devis valable jusqu’à', Text(fmtDateTime(i['quoteExpiresAt']))),
       ])),
       gap(12),
-      if (i['executable'] != true) InfoBanner('Paiement NON exécutable (${i['nonExecutableReason']}). Il reste un brouillon sans promesse de succès.', color: p.warning, icon: Icons.block_rounded),
+      if (i['executable'] != true) InfoBanner('${reasonLabel(i['nonExecutableReason'])}. Ce paiement reste un brouillon et ne sera pas envoyé.', color: p.warning, icon: Icons.block_rounded),
       if (over && i['exception'] == null) ...[gap(8), InfoBanner('Ce paiement dépasse vos plafonds (30 000 F/opération, 60 000 F/24 h, frais inclus). Une dérogation unique peut être demandée : active après 72 h, valable 24 h, pour ce seul paiement.', color: p.warning, icon: Icons.speed_rounded, action: TextButton(onPressed: () async { await requestException(context, i); final fresh = await context.appRead.api.get('/payments/intents/${i['id']}'); if (mounted) setState(() => intent = fresh); }, child: const Text('Demander')))],
       if (over && i['exception'] != null) ...[gap(8), InfoBanner('Dérogation ${stateFr[i['exception']['effectiveState']]?.toLowerCase() ?? i['exception']['effectiveState']} : utilisable du ${fmtDateTime(i['exception']['activeFrom'])} au ${fmtDateTime(i['exception']['expiresAt'])}. Retrouvez ce paiement dans la liste pour le valider à ce moment-là.', color: p.info, icon: Icons.hourglass_top_rounded)],
       if (unverified) ...[gap(8), CheckboxListTile(contentPadding: EdgeInsets.zero, value: ack, onChanged: (v) => setState(() => ack = v!), title: Text('Je confirme que ${b['phoneE164']} est bien le bon destinataire', style: inter(14, w: FontWeight.w600, color: p.ink)), subtitle: const Text('Nom officiel non vérifiable chez le prestataire : contrôle renforcé.'))],
@@ -250,7 +231,7 @@ class PaymentDetailScreen extends StatelessWidget {
     final p = c.pal;
     final s = i['state'] as String;
     final ok = s == 'SUCCEEDED';
-    return PageScaffold(title: i['direction'] == 'PAYOUT' ? 'Paiement' : 'Dépôt', subtitle: i['simulated'] == true ? 'Prestataire simulé — aucun argent réel' : null, back: true, children: [
+    return PageScaffold(title: i['direction'] == 'PAYOUT' ? 'Paiement' : 'Dépôt', back: true, children: [
       AppCard(child: Column(children: [
         // L'animation de réussite n'apparaît qu'après confirmation PSP (Annexe B).
         AnimatedSwitcher(duration: Motion.d(c, Motion.slow), child: Container(key: ValueKey(s), width: 84, height: 84, decoration: BoxDecoration(shape: BoxShape.circle, color: stateColor(c, s).withValues(alpha: .14)), child: Icon(ok ? Icons.check_rounded : s == 'UNKNOWN' ? Icons.help_outline_rounded : s == 'FAILED' || s == 'CANCELLED' ? Icons.close_rounded : Icons.hourglass_top_rounded, size: 42, color: stateColor(c, s)))),
@@ -279,11 +260,11 @@ class PaymentDetailScreen extends StatelessWidget {
       ])),
       gap(),
       AppCard(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const SectionTitle('Chronologie', subtitle: 'États canoniques issus du serveur'),
+        const SectionTitle('Chronologie'),
         for (final h in (i['history'] as List)) Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Column(children: [Container(width: 12, height: 12, decoration: BoxDecoration(color: stateColor(c, h['to']), shape: BoxShape.circle)), Container(width: 2, height: 34, color: p.border)]),
           const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(stateFr[h['to']] ?? h['to'], style: inter(14, w: FontWeight.w600, color: p.ink)), Text('${fmtDateTime(h['at'])} · ${h['cause']}', style: inter(12, color: p.inkMuted))])),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(stateFr[h['to']] ?? h['to'], style: inter(14, w: FontWeight.w600, color: p.ink)), Text(fmtDateTime(h['at']), style: inter(12, color: p.inkMuted))])),
         ]),
       ])),
     ]);

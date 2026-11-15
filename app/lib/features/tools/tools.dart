@@ -103,13 +103,13 @@ class SyncCenterScreen extends StatelessWidget {
       AppCard(child: Row(children: [Icon(app.online ? (app.streamConnected ? Icons.cloud_done_rounded : Icons.cloud_sync_rounded) : Icons.cloud_off_rounded, color: app.online ? p.success : p.warning, size: 30), const SizedBox(width: 12), Expanded(child: Text(app.online ? (app.streamConnected ? 'En ligne · temps réel actif' : 'En ligne · reconnexion du flux…') : 'Hors ligne : lecture du cache chiffré, saisies en brouillon', style: inter(14.5, w: FontWeight.w600, color: p.ink))), TextButton(onPressed: () => app.catchUp(), child: const Text('Actualiser'))])),
       gap(),
       if (local.isNotEmpty) ...[
-        SectionTitle('Sur cet appareil', subtitle: '${local.length} brouillon(s) à présenter au serveur (rien n’est appliqué à cette étape)'),
+        SectionTitle('Sur cet appareil', subtitle: '${local.length} brouillon(s) en attente de synchronisation (rien n’est appliqué à cette étape)'),
         AppCard(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6), child: Column(children: [for (final d in local) ListRow(leading: const IconBadge(Icons.edit_note_rounded), title: '${d['targetResource'] == 'EXPENSE' ? 'Dépense' : d['targetResource']} · ${d['payload']['label'] ?? ''}', subtitle: 'Créé ${fmtDateTime(d['createdAt'])}', trailing: Row(mainAxisSize: MainAxisSize.min, children: [if (d['payload']['amountMinor'] != null) Money(d['payload']['amountMinor'], size: 13.5), IconButton(tooltip: 'Abandonner', onPressed: () => app.removeLocalDraft(d['clientDraftId']), icon: const Icon(Icons.delete_outline_rounded))]))])),
         gap(10),
         FilledButton.icon(onPressed: !app.online ? null : () async {
           final r = await run(context, () => app.api.post('/sync/drafts/prepare', {'drafts': [for (final d in local) {'clientDraftId': d['clientDraftId'], 'targetResource': d['targetResource'], 'operation': d['operation'], if (d['targetId'] != null) 'targetId': d['targetId'], if (d['baseVersion'] != null) 'baseVersion': d['baseVersion'], 'payload': d['payload']}]}), success: 'Brouillons présentés : confirmez-les un par un');
           if (r != null) { for (final d in local) { await app.removeLocalDraft(d['clientDraftId']); } app.bump(); }
-        }, icon: const Icon(Icons.upload_rounded), label: const Text('Présenter au serveur pour validation')),
+        }, icon: const Icon(Icons.upload_rounded), label: const Text('Synchroniser pour validation')),
         gap(),
       ],
       const SectionTitle('À confirmer individuellement'),
@@ -130,7 +130,7 @@ class _DraftCard extends StatelessWidget {
       gap(8),
       for (final e in pl.entries.where((e) => e.key != 'accountId' && e.key != 'categoryId')) KeyValue(e.key, Text('${e.key.contains('Minor') ? money('${e.value}', hidden: context.app.hideAmounts) : e.value}')),
       if (rejected) InfoBanner('Refusé : ${(d['validation'] as List).join(', ')}', color: p.error, icon: Icons.block_rounded),
-      if (d['state'] == 'CONFLICT') const InfoBanner('Conflit : la ressource a changé sur le serveur. Appliquer sur la dernière version, ou abandonner.', icon: Icons.call_split_rounded),
+      if (d['state'] == 'CONFLICT') const InfoBanner('Conflit : l’élément a été modifié ailleurs. Appliquer sur la dernière version, ou abandonner.', icon: Icons.call_split_rounded),
       gap(10),
       Row(children: [
         Expanded(child: OutlinedButton(onPressed: () async { await run(context, () => context.appRead.api.post('/sync/drafts/${d['id']}/discard')); if (context.mounted) context.appRead.bump(); }, child: const Text('Abandonner'))),

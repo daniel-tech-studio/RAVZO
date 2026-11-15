@@ -228,7 +228,7 @@ class _WithdrawalCardState extends State<_WithdrawalCard> {
       Text('Demandé ${fmtDateTime(w['requestedAt'])}', style: inter(12.5, color: p.inkMuted)),
       if (waiting) ...[
         gap(10), ProgressBar(1 - (remaining.inSeconds.clamp(0, total) / total), color: p.copper),
-        gap(6), Text(remaining.isNegative ? 'Délai écoulé : confirmation explicite requise' : 'Confirmable dans ${countdown(remaining)} (horloge serveur)', style: inter(13, w: FontWeight.w600, color: remaining.isNegative ? p.success : p.inkSoft)),
+        gap(6), Text(remaining.isNegative ? 'Délai écoulé : confirmation explicite requise' : 'Confirmable dans ${countdown(remaining)}', style: inter(13, w: FontWeight.w600, color: remaining.isNegative ? p.success : p.inkSoft)),
         gap(10), Row(children: [
           Expanded(child: OutlinedButton(onPressed: () async { await run(context, () => context.appRead.api.post('/savings/withdrawal-requests/${w['id']}/cancel'), success: 'Demande annulée'); if (context.mounted) context.appRead.bump(); }, child: const Text('Annuler'))),
           const SizedBox(width: 10),

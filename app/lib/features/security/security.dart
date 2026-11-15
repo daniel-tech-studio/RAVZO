@@ -34,7 +34,6 @@ class _Overview extends StatelessWidget {
         KeyValue('Cet appareil', StatePill(s['deviceTrusted'] == true ? 'ACTIVE' : 'PENDING')),
         KeyValue('Codes de secours restants', Text('${s['remainingRecoveryCodes']} / 10', style: inter(14, w: FontWeight.w700, color: s['remainingRecoveryCodes'] < 3 ? p.error : p.ink))),
         KeyValue('Paiements réels', Text(s['paymentsLiveEnabled'] == true ? 'Activés' : 'Désactivés')),
-        KeyValue('Heure serveur', Text(fmtDateTime(s['serverTime']))),
       ])),
       gap(),
       OutlinedButton.icon(onPressed: () => _regen(c), icon: const Icon(Icons.password_rounded), label: const Text('Régénérer les codes de secours')),

@@ -89,7 +89,6 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
-    final app = context.app;
     return _AuthFrame(children: [
       Text('Connexion sécurisée', style: sora(28, w: FontWeight.w700, color: p.ink)),
       const SizedBox(height: 6),
@@ -107,7 +106,6 @@ class _LoginScreenState extends State<LoginScreen> {
       FilledButton(onPressed: busy ? null : submit, child: busy ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4)) : const Text('Se connecter')),
       gap(8),
       TextButton(onPressed: () => context.go('/recovery'), child: const Text('Accès perdu ? Récupération du compte')),
-      TextButton(onPressed: () => _server(context, app), child: Text('Serveur : ${app.api.baseUrl}', style: inter(12, color: p.inkMuted))),
     ]);
   }
   Future<void> submit() async {
@@ -116,13 +114,6 @@ class _LoginScreenState extends State<LoginScreen> {
     try { await context.appRead.login(email.text.trim(), password.text, device.text.trim().isEmpty ? 'Appareil' : device.text.trim()); }
     catch (e) { setState(() => error = errText(e)); }
     finally { if (mounted) setState(() => busy = false); }
-  }
-  void _server(BuildContext context, AppState app) {
-    final c = TextEditingController(text: app.api.baseUrl);
-    openSheet(context, (s) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      TextField(controller: c, decoration: const InputDecoration(labelText: 'URL de l’API (https en production)')), gap(),
-      FilledButton(onPressed: () async { await app.setApiBase(c.text.trim()); if (s.mounted) Navigator.pop(s); setState(() {}); }, child: const Text('Enregistrer')),
-    ]), title: 'Serveur RAVZO');
   }
 }
 

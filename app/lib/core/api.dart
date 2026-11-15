@@ -49,7 +49,7 @@ class Api {
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query?..removeWhere((k, v) => v == null || v.isEmpty));
     final req = http.Request(method, uri)..headers.addAll({if (_access != null) 'Authorization': 'Bearer $_access', ...?headers});
     if (bytes != null) req.bodyBytes = bytes;
-    try { return await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 30))); } on SocketException { _setOnline(false); throw ApiError(0, 'OFFLINE', 'Hors ligne : serveur injoignable'); } on TimeoutException { throw ApiError(0, 'OFFLINE', 'Délai dépassé'); }
+    try { return await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 30))); } on SocketException { _setOnline(false); throw ApiError(0, 'OFFLINE', 'Hors ligne : connexion impossible'); } on TimeoutException { throw ApiError(0, 'OFFLINE', 'Délai dépassé'); }
   }
 
   Future<dynamic> _send(String method, String path, {Object? body, String? idemKey, Map<String, String?>? query, bool retried = false}) async {
@@ -61,7 +61,7 @@ class Api {
       if (body != null && method != 'GET') req.body = jsonEncode(body);
       r = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 25)));
       _setOnline(true);
-    } on SocketException { _setOnline(false); throw ApiError(0, 'OFFLINE', 'Hors ligne : serveur injoignable'); } on TimeoutException { throw ApiError(0, 'OFFLINE', 'Délai dépassé — le résultat d’une opération sensible doit être vérifié avant tout nouvel essai'); } on http.ClientException { _setOnline(false); throw ApiError(0, 'OFFLINE', 'Connexion impossible'); }
+    } on SocketException { _setOnline(false); throw ApiError(0, 'OFFLINE', 'Hors ligne : connexion impossible'); } on TimeoutException { throw ApiError(0, 'OFFLINE', 'Délai dépassé — le résultat d’une opération sensible doit être vérifié avant tout nouvel essai'); } on http.ClientException { _setOnline(false); throw ApiError(0, 'OFFLINE', 'Connexion impossible'); }
     final ct = r.headers['content-type'] ?? '';
     final json = ct.contains('json') && r.body.isNotEmpty ? jsonDecode(r.body) : null;
     if (json is Map && json['meta']?['serverTime'] != null) lastServerTime = DateTime.tryParse(json['meta']['serverTime']);
