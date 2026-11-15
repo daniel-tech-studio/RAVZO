@@ -1,0 +1,55 @@
+# RAVZO — production mono-hôte (serveur souven). API exposée uniquement en local (127.0.0.1:3400), HTTPS par Caddy.
+name: ravzo
+x-app: &app
+  image: ravzo-backend:latest
+  env_file: .env.production
+  restart: unless-stopped
+  volumes:
+    - storage:/app/storage
+    - ./secrets:/app/secrets:ro
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ravzo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ravzo
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U ravzo"], interval: 5s, retries: 20 }
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 20 }
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["npx", "prisma", "migrate", "deploy"]
+  api:
+    <<: *app
+    command: ["node", "dist/src/main.js"]
+    ports: ["127.0.0.1:3400:3000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+  worker:
+    <<: *app
+    command: ["node", "dist/src/worker.js"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment: { PGPASSWORD: "${POSTGRES_PASSWORD:?}" }
+    volumes: [./backups:/backups]
+    depends_on: { postgres: { condition: service_healthy } }
+    # Sauvegarde logique quotidienne, 14 jours conservés (sur le même hôte : à compléter par une copie externe).
+    entrypoint: ["/bin/sh", "-c", "while true; do pg_dump -h postgres -U ravzo -Fc ravzo > /backups/ravzo-$$(date +%Y%m%d-%H%M).dump && find /backups -name 'ravzo-*.dump' -mtime +14 -delete; sleep 86400; done"]
+volumes:
+  pgdata:
+  redisdata:
+  storage:

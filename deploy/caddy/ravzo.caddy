@@ -1,0 +1,16 @@
+# RAVZO API — HTTPS sans domaine payant via sslip.io (Let's Encrypt)
+# URL publique : https://ravzo-api.72-60-186-169.sslip.io
+ravzo-api.72-60-186-169.sslip.io {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:3400 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+		flush_interval -1
+	}
+}

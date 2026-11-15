@@ -18,7 +18,7 @@ export function configureApp(app: INestApplication) {
   }));
   app.enableCors({ origin: config.corsOrigins, credentials: false });
   (app as any).getHttpAdapter().getInstance().disable('x-powered-by');
-  (app as any).getHttpAdapter().getInstance().set('trust proxy', 'loopback');
+  (app as any).getHttpAdapter().getInstance().set('trust proxy', process.env.TRUST_PROXY ?? 'loopback');
 }
 function flatten(e: any, path = ''): string[] {
   const p = path ? `${path}.${e.property}` : e.property;

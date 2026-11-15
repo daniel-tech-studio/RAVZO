@@ -44,7 +44,7 @@ class AppState extends ChangeNotifier {
   int needsIntervention = 0, unreadCritical = 0, unread = 0;
 
   AppState({String? baseUrl}) {
-    api = Api(baseUrl ?? const String.fromEnvironment('RAVZO_API', defaultValue: 'http://127.0.0.1:3000/api/v1'), store);
+    api = Api(baseUrl ?? const String.fromEnvironment('RAVZO_API', defaultValue: 'https://ravzo-api.72-60-186-169.sslip.io/api/v1'), store);
     key = DeviceKey(store);
     push = PushReceiver(api)
       ..onStatus = notifyListeners
@@ -71,7 +71,8 @@ class AppState extends ChangeNotifier {
     final ls = store.get<String>('lastSync');
     lastSync = ls == null ? null : DateTime.tryParse(ls);
     final url = store.get<String>('apiBase');
-    if (url != null) api.baseUrl = url;
+    // Une adresse locale mémorisée (développement) ne remplace jamais le serveur de production compilé.
+    if (url != null && url.startsWith('https://')) api.baseUrl = url;
     await api.loadTokens();
     if (!api.hasSession) { phase = SessionPhase.signedOut; notifyListeners(); return; }
     await refreshMe();
